@@ -30,9 +30,11 @@ class Task:
 
 
 class Owner:
-    def __init__(self, name: str, available_minutes: int):
+    def __init__(self, name: str, available_minutes: int, pet: Pet):
         self.name = name
         self.available_minutes = available_minutes
+        self.pet = pet
+        self.tasks: List[Task] = []
 
     def add_task(self, task: Task) -> None:
         pass

@@ -1,9 +1,6 @@
 # PawPal+ Project Reflection
 
 ## 1. System Design
-
-**a. Initial design**
-
 The three core actions a user should be able to perform in PawPal+ are:
 
 1. **Enter owner and pet info** — The user provides basic context about themselves and their pet, including the owner's name, the pet's name and type, and how much time is available in the day. This information gives the scheduler the constraints it needs to build a realistic plan.
@@ -12,12 +9,29 @@ The three core actions a user should be able to perform in PawPal+ are:
 
 3. **Generate and view a daily plan** — The user triggers the scheduler to produce a prioritized, constraint-aware daily schedule. The app displays the resulting plan clearly and explains the reasoning behind it — for example, why certain tasks were included, deferred, or ordered the way they were.
 
-- What classes did you include, and what responsibilities did you assign to each?
+**a. Initial design**
+The system is built around four core classes:
+
+- **`Pet`** — A dataclass that holds information about the pet, including name, species, age, and any special needs (such as required medication). It is responsible for representing the pet's profile and exposing a `has_special_needs()` method that the scheduler can use to prioritize certain tasks.
+
+- **`Task`** — A dataclass that represents a single pet care responsibility. It stores the task name, estimated duration in minutes, priority level (low/medium/high), category (e.g. walk, feeding, grooming), notes, and a status field to track whether it was scheduled or skipped. It provides `is_high_priority()` as a convenience method for scheduling logic.
+
+- **`Owner`** — Holds the owner's name, their daily time budget (`available_minutes`), a reference to their `Pet`, and a list of `Task` objects. It is responsible for managing the task list through `add_task()` and `remove_task()`, making it the single source of truth for all scheduling inputs.
+
+- **`Scheduler`** — Takes an `Owner` as its only input and accesses the pet and tasks through it. Responsible for generating a daily care plan via `generate_plan()`, checking whether a task fits within the remaining time budget via `fits_in_budget()`, and returning any tasks that couldn't be scheduled via `get_skipped_tasks()`.
 
 **b. Design changes**
+Yes, the design changed several times during the skeleton review phase. The most significant changes were:
 
-- Did your design change during implementation?
-- If yes, describe at least one change and why you made it.
+- **Removed `Pet` from `Scheduler`** — The initial UML had `Scheduler` holding both `owner` and `pet` as separate attributes. Since `pet` is already accessible via `owner.pet`, this was redundant. Removing it made `Owner` the single entry point into the model, which is cleaner and avoids the two getting out of sync.
+
+- **Added `Priority` enum** — The original design used a plain `str` for `Task.priority`. This was replaced with a `Priority` enum (`LOW`, `MEDIUM`, `HIGH`) to prevent invalid values like `"HIGH"` or `"urgent"` from silently breaking scheduling logic.
+
+- **Added `Task.pet` reference** — Tasks initially had no link back to the `Pet` they belonged to. A `pet: Optional[Pet]` field was added so the scheduler can inspect pet-specific constraints (like `special_needs`) directly from a task. `Owner.add_task()` automatically sets this link when a task is added.
+
+- **Added `status` default and `Scheduler` state** — `Task.status` originally had no default, requiring callers to always pass it. It now defaults to `"pending"`. Similarly, `Scheduler` was given `scheduled_tasks` and `skipped_tasks` lists so that `get_skipped_tasks()` has persistent state to return after `generate_plan()` runs.
+
+- **Gave `generate_plan()` a defined return structure** — The method originally returned `None`. It now returns a `dict` with keys `"scheduled"`, `"skipped"`, and `"reasoning"` so the UI layer knows exactly what to expect.
 
 ---
 

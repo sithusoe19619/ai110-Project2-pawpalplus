@@ -168,3 +168,254 @@ class TestScheduler:
         scheduler = Scheduler(owner_with_pets)
         plan = scheduler.generate_plan()
         assert scheduler.get_skipped_tasks() == plan["skipped"]
+
+
+# ── Phase 5: Sorting ────────────────────────────────────────────────────────
+
+class TestSortByTime:
+    def test_sorts_tasks_in_chronological_order(self):
+        owner = Owner("Alex", 120)
+        pet = Pet("Rex", "dog", 3)
+        t1 = Task("Evening Walk", 30, Priority.HIGH, "exercise", "", scheduled_time="18:00")
+        t2 = Task("Morning Walk", 30, Priority.HIGH, "exercise", "", scheduled_time="07:00")
+        t3 = Task("Lunch Feed",  10, Priority.MEDIUM, "nutrition", "", scheduled_time="12:00")
+        pet.add_task(t1)
+        pet.add_task(t2)
+        pet.add_task(t3)
+        owner.add_pet(pet)
+        scheduler = Scheduler(owner)
+
+        result = scheduler.sort_by_time([t1, t2, t3])
+        assert result == [t2, t3, t1]
+
+    def test_same_time_returns_both_without_error(self):
+        owner = Owner("Alex", 120)
+        pet = Pet("Rex", "dog", 3)
+        t1 = Task("Walk",  30, Priority.HIGH, "exercise", "", scheduled_time="08:00")
+        t2 = Task("Train", 20, Priority.MEDIUM, "training", "", scheduled_time="08:00")
+        pet.add_task(t1)
+        pet.add_task(t2)
+        owner.add_pet(pet)
+        scheduler = Scheduler(owner)
+
+        result = scheduler.sort_by_time([t1, t2])
+        assert len(result) == 2
+        assert all(t in result for t in [t1, t2])
+
+    def test_empty_list_returns_empty(self):
+        owner = Owner("Alex", 120)
+        scheduler = Scheduler(owner)
+
+        result = scheduler.sort_by_time([])
+        assert result == []
+
+
+# ── Phase 5: Recurring Tasks ────────────────────────────────────────────────
+
+class TestMarkComplete:
+    def test_daily_task_creates_next_day(self):
+        task = Task("Walk", 30, Priority.HIGH, "exercise", "",
+                    scheduled_date="2026-03-28", frequency="daily")
+        next_task = task.mark_complete()
+
+        assert task.status == "completed"
+        assert next_task is not None
+        assert next_task.scheduled_date == "2026-03-29"
+        assert next_task.status == "pending"
+
+    def test_weekly_task_creates_next_week(self):
+        task = Task("Bath", 45, Priority.MEDIUM, "grooming", "",
+                    scheduled_date="2026-03-28", frequency="weekly")
+        next_task = task.mark_complete()
+
+        assert next_task is not None
+        assert next_task.scheduled_date == "2026-04-04"
+        assert next_task.status == "pending"
+
+    def test_as_needed_returns_none(self):
+        task = Task("Vet Visit", 60, Priority.HIGH, "health", "",
+                    frequency="as needed")
+        next_task = task.mark_complete()
+
+        assert task.status == "completed"
+        assert next_task is None
+
+    def test_next_task_added_to_same_pet(self):
+        pet = Pet("Rex", "dog", 3)
+        task = Task("Walk", 30, Priority.HIGH, "exercise", "",
+                    scheduled_date="2026-03-28", frequency="daily")
+        pet.add_task(task)
+        before_count = len(pet.tasks)
+
+        next_task = task.mark_complete()
+
+        assert next_task in pet.tasks
+        assert len(pet.tasks) == before_count + 1
+        assert next_task.pet is pet
+
+
+# ── Phase 5: Conflict Detection ─────────────────────────────────────────────
+
+class TestDetectConflicts:
+    def test_same_pet_overlap(self):
+        owner = Owner("Alex", 120)
+        pet = Pet("Rex", "dog", 3)
+        t1 = Task("Walk",  30, Priority.HIGH, "exercise", "",
+                  scheduled_time="08:00", scheduled_date="2026-03-28")
+        t2 = Task("Train", 30, Priority.MEDIUM, "training", "",
+                  scheduled_time="08:15", scheduled_date="2026-03-28")
+        pet.add_task(t1)
+        pet.add_task(t2)
+        owner.add_pet(pet)
+        scheduler = Scheduler(owner)
+
+        conflicts = scheduler.detect_conflicts([t1, t2])
+        assert len(conflicts) == 1
+        assert conflicts[0]["type"] == "same_pet"
+
+    def test_cross_pet_overlap(self):
+        owner = Owner("Alex", 120)
+        dog = Pet("Rex", "dog", 3)
+        cat = Pet("Luna", "cat", 5)
+        t1 = Task("Walk Rex",  30, Priority.HIGH, "exercise", "",
+                  scheduled_time="08:00", scheduled_date="2026-03-28")
+        t2 = Task("Feed Luna", 20, Priority.HIGH, "nutrition", "",
+                  scheduled_time="08:10", scheduled_date="2026-03-28")
+        dog.add_task(t1)
+        cat.add_task(t2)
+        owner.add_pet(dog)
+        owner.add_pet(cat)
+        scheduler = Scheduler(owner)
+
+        conflicts = scheduler.detect_conflicts([t1, t2])
+        assert len(conflicts) == 1
+        assert conflicts[0]["type"] == "cross_pet"
+
+    def test_different_dates_no_conflict(self):
+        owner = Owner("Alex", 120)
+        pet = Pet("Rex", "dog", 3)
+        t1 = Task("Walk", 30, Priority.HIGH, "exercise", "",
+                  scheduled_time="08:00", scheduled_date="2026-03-28")
+        t2 = Task("Walk", 30, Priority.HIGH, "exercise", "",
+                  scheduled_time="08:00", scheduled_date="2026-03-29")
+        pet.add_task(t1)
+        pet.add_task(t2)
+        owner.add_pet(pet)
+        scheduler = Scheduler(owner)
+
+        conflicts = scheduler.detect_conflicts([t1, t2])
+        assert conflicts == []
+
+    def test_adjacent_times_no_conflict(self):
+        owner = Owner("Alex", 120)
+        pet = Pet("Rex", "dog", 3)
+        t1 = Task("Walk",  30, Priority.HIGH, "exercise", "",
+                  scheduled_time="08:00", scheduled_date="2026-03-28")
+        t2 = Task("Train", 30, Priority.MEDIUM, "training", "",
+                  scheduled_time="08:30", scheduled_date="2026-03-28")
+        pet.add_task(t1)
+        pet.add_task(t2)
+        owner.add_pet(pet)
+        scheduler = Scheduler(owner)
+
+        conflicts = scheduler.detect_conflicts([t1, t2])
+        assert conflicts == []
+
+
+# ── Phase 5: Filtering ──────────────────────────────────────────────────────
+
+class TestFilterTasks:
+    def test_filter_by_status(self):
+        owner = Owner("Alex", 120)
+        pet = Pet("Rex", "dog", 3)
+        t1 = Task("Walk",  30, Priority.HIGH, "exercise", "", status="pending")
+        t2 = Task("Bath",  20, Priority.MEDIUM, "grooming", "", status="completed")
+        pet.add_task(t1)
+        pet.add_task(t2)
+        owner.add_pet(pet)
+        scheduler = Scheduler(owner)
+
+        result = scheduler.filter_tasks([t1, t2], status="pending")
+        assert result == [t1]
+
+    def test_filter_by_pet_name_case_insensitive(self):
+        owner = Owner("Alex", 120)
+        dog = Pet("Rex", "dog", 3)
+        cat = Pet("Luna", "cat", 5)
+        t1 = Task("Walk", 30, Priority.HIGH, "exercise", "")
+        t2 = Task("Feed", 10, Priority.HIGH, "nutrition", "")
+        dog.add_task(t1)
+        cat.add_task(t2)
+        owner.add_pet(dog)
+        owner.add_pet(cat)
+        scheduler = Scheduler(owner)
+
+        result = scheduler.filter_tasks([t1, t2], pet_name="rex")
+        assert result == [t1]
+
+    def test_combined_filters_use_and_logic(self):
+        owner = Owner("Alex", 120)
+        pet = Pet("Rex", "dog", 3)
+        t1 = Task("Walk",  30, Priority.HIGH, "exercise", "", status="pending")
+        t2 = Task("Bath",  20, Priority.MEDIUM, "grooming", "", status="completed")
+        t3 = Task("Train", 15, Priority.LOW, "training", "", status="pending")
+        pet.add_task(t1)
+        pet.add_task(t2)
+        pet.add_task(t3)
+        owner.add_pet(pet)
+        scheduler = Scheduler(owner)
+
+        result = scheduler.filter_tasks([t1, t2, t3], status="pending", pet_name="Rex")
+        assert result == [t1, t3]
+
+    def test_no_filters_returns_full_list(self):
+        owner = Owner("Alex", 120)
+        pet = Pet("Rex", "dog", 3)
+        t1 = Task("Walk", 30, Priority.HIGH, "exercise", "")
+        t2 = Task("Bath", 20, Priority.MEDIUM, "grooming", "")
+        pet.add_task(t1)
+        pet.add_task(t2)
+        owner.add_pet(pet)
+        scheduler = Scheduler(owner)
+
+        result = scheduler.filter_tasks([t1, t2])
+        assert result == [t1, t2]
+
+
+# ── Phase 5: Scheduling ─────────────────────────────────────────────────────
+
+class TestGeneratePlan:
+    def test_all_tasks_fit_within_budget(self):
+        owner = Owner("Alex", 120)
+        pet = Pet("Rex", "dog", 3)
+        pet.add_task(Task("Walk",  30, Priority.HIGH, "exercise", ""))
+        pet.add_task(Task("Bath",  20, Priority.MEDIUM, "grooming", ""))
+        pet.add_task(Task("Treat",  5, Priority.LOW, "food", ""))
+        owner.add_pet(pet)
+
+        plan = Scheduler(owner).generate_plan()
+        assert len(plan["scheduled"]) == 3
+        assert len(plan["skipped"]) == 0
+
+    def test_high_priority_scheduled_low_skipped_when_budget_tight(self):
+        owner = Owner("Alex", 35)
+        pet = Pet("Rex", "dog", 3)
+        high = Task("Walk",  30, Priority.HIGH, "exercise", "")
+        low  = Task("Treat", 10, Priority.LOW, "food", "")
+        pet.add_task(high)
+        pet.add_task(low)
+        owner.add_pet(pet)
+
+        plan = Scheduler(owner).generate_plan()
+        assert high in plan["scheduled"]
+        assert low in plan["skipped"]
+
+    def test_pet_with_no_tasks(self):
+        owner = Owner("Alex", 60)
+        pet = Pet("Rex", "dog", 3)
+        owner.add_pet(pet)
+
+        plan = Scheduler(owner).generate_plan()
+        assert plan["scheduled"] == []
+        assert plan["skipped"] == []
+        assert plan["reasoning"] == []

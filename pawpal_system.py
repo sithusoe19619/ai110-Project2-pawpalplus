@@ -2,6 +2,8 @@ from dataclasses import dataclass, field, replace
 from typing import List, Optional
 from enum import Enum
 from datetime import date, timedelta
+import json
+import os
 
 
 class Priority(Enum):
@@ -123,6 +125,77 @@ class Owner:
             all_tasks.extend(pet.tasks)
         return all_tasks
 
+    def save_to_json(self, filepath: str = "data.json") -> None:
+        """Save the owner, all pets, and all tasks to a JSON file."""
+        data = {
+            "owner": self.name,
+            "available_minutes": self.available_minutes,
+            "pets": [
+                {
+                    "name": pet.name,
+                    "species": pet.species,
+                    "age": pet.age,
+                    "special_needs": pet.special_needs,
+                    "tasks": [
+                        {
+                            "name": task.name,
+                            "duration_minutes": task.duration_minutes,
+                            "priority": task.priority.value,
+                            "category": task.category,
+                            "notes": task.notes,
+                            "scheduled_time": task.scheduled_time,
+                            "scheduled_date": task.scheduled_date,
+                            "frequency": task.frequency,
+                            "status": task.status,
+                        }
+                        for task in pet.tasks
+                    ],
+                }
+                for pet in self.pets
+            ],
+        }
+        with open(filepath, "w") as f:
+            json.dump(data, f, indent=2)
+
+    @classmethod
+    def load_from_json(cls, filepath: str = "data.json") -> Optional["Owner"]:
+        """Load an owner with all pets and tasks from a JSON file.
+
+        Returns None if the file does not exist.
+        """
+        if not os.path.exists(filepath):
+            return None
+
+        with open(filepath, "r") as f:
+            data = json.load(f)
+
+        priority_map = {"low": Priority.LOW, "medium": Priority.MEDIUM, "high": Priority.HIGH}
+        owner = cls(data["owner"], data["available_minutes"])
+
+        for pet_data in data["pets"]:
+            pet = Pet(
+                name=pet_data["name"],
+                species=pet_data["species"],
+                age=pet_data["age"],
+                special_needs=pet_data.get("special_needs", ""),
+            )
+            for task_data in pet_data["tasks"]:
+                task = Task(
+                    name=task_data["name"],
+                    duration_minutes=task_data["duration_minutes"],
+                    priority=priority_map[task_data["priority"]],
+                    category=task_data["category"],
+                    notes=task_data["notes"],
+                    scheduled_time=task_data.get("scheduled_time", "00:00"),
+                    scheduled_date=task_data.get("scheduled_date", ""),
+                    frequency=task_data.get("frequency", "daily"),
+                    status=task_data.get("status", "pending"),
+                )
+                pet.add_task(task)
+            owner.add_pet(pet)
+
+        return owner
+
 
 class Scheduler:
     def __init__(self, owner: Owner):
@@ -139,11 +212,7 @@ class Scheduler:
         self.skipped_tasks = []
         reasoning = []
 
-        priority_order = {Priority.HIGH: 0, Priority.MEDIUM: 1, Priority.LOW: 2}
-        all_tasks = sorted(
-            self.owner.get_all_tasks(),
-            key=lambda t: priority_order[t.priority]
-        )
+        all_tasks = self.sort_by_priority_then_time(self.owner.get_all_tasks())
 
         time_remaining = self.owner.available_minutes
 
@@ -168,6 +237,8 @@ class Scheduler:
             "reasoning": reasoning,
         }
 
+    PRIORITY_ORDER = {Priority.HIGH: 0, Priority.MEDIUM: 1, Priority.LOW: 2}
+
     def sort_by_time(self, tasks: List[Task]) -> List[Task]:
         """Sort tasks in chronological order by their scheduled_time.
 
@@ -186,6 +257,28 @@ class Scheduler:
             # [Task at 07:00, Task at 08:00, Task at 14:00, ...]
         """
         return sorted(tasks, key=lambda t: self._to_minutes(t.scheduled_time))
+
+    def sort_by_priority_then_time(self, tasks: List[Task]) -> List[Task]:
+        """Sort tasks by priority (HIGH first) then by scheduled_time within each tier.
+
+        Uses a composite key: (priority_order, minutes_since_midnight). HIGH-priority
+        tasks always come before MEDIUM, which come before LOW. Within the same
+        priority level, tasks are ordered earliest to latest.
+
+        Args:
+            tasks: List of Task objects to sort.
+
+        Returns:
+            A new list sorted by priority descending, then time ascending.
+
+        Example:
+            >>> scheduler.sort_by_priority_then_time(tasks)
+            # [HIGH 07:00, HIGH 08:00, MEDIUM 07:00, MEDIUM 14:00, LOW 21:00]
+        """
+        return sorted(
+            tasks,
+            key=lambda t: (self.PRIORITY_ORDER[t.priority], self._to_minutes(t.scheduled_time))
+        )
 
     def filter_tasks(self, tasks: List[Task], status: Optional[str] = None, pet_name: Optional[str] = None) -> List[Task]:
         """Filter a list of tasks by completion status and/or pet name.
@@ -301,6 +394,52 @@ class Scheduler:
                     f"you can only attend one pet at a time."
                 )
         return warnings
+
+    def suggest_next_slot(self, task: Task, scheduled_tasks: List[Task],
+                          day_start: str = "06:00", day_end: str = "22:00") -> Optional[str]:
+        """Find the earliest available time slot for a task that avoids all conflicts.
+
+        Scans the day from day_start to day_end, looking for the first gap between
+        existing tasks that is large enough to fit the new task's duration. Considers
+        all tasks on the same scheduled_date — both same-pet and cross-pet — since
+        the owner can only attend one task at a time.
+
+        Args:
+            task: The Task to find a slot for (uses its duration_minutes and scheduled_date).
+            scheduled_tasks: List of already-scheduled Tasks to avoid overlapping with.
+            day_start: Earliest allowed start time ("HH:MM"). Defaults to "06:00".
+            day_end: Latest allowed end time ("HH:MM"). Defaults to "22:00".
+
+        Returns:
+            A "HH:MM" string for the suggested start time, or None if no slot fits
+            within the day window.
+
+        Example:
+            >>> scheduler.suggest_next_slot(training_task, existing_tasks)
+            '07:30'  # first gap after existing 07:00-07:30 task
+        """
+        start_limit = self._to_minutes(day_start)
+        end_limit = self._to_minutes(day_end)
+
+        same_day = [t for t in scheduled_tasks
+                    if t.scheduled_date == task.scheduled_date and t is not task]
+
+        occupied = sorted(
+            [(self._to_minutes(t.scheduled_time),
+              self._to_minutes(t.scheduled_time) + t.duration_minutes)
+             for t in same_day]
+        )
+
+        cursor = start_limit
+        for occ_start, occ_end in occupied:
+            if occ_start >= cursor + task.duration_minutes:
+                break
+            if occ_end > cursor:
+                cursor = occ_end
+
+        if cursor + task.duration_minutes <= end_limit:
+            return f"{cursor // 60:02d}:{cursor % 60:02d}"
+        return None
 
     def fits_in_budget(self, task: Task, time_remaining: int) -> bool:
         """Return True if the task's duration fits within the remaining time."""

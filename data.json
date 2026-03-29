@@ -1,0 +1,47 @@
+{
+  "owner": "Jordan",
+  "available_minutes": 80,
+  "pets": [
+    {
+      "name": "Addy",
+      "species": "dog",
+      "age": 0,
+      "special_needs": "",
+      "tasks": [
+        {
+          "name": "Morning walk",
+          "duration_minutes": 20,
+          "priority": "high",
+          "category": "general",
+          "notes": "",
+          "scheduled_time": "08:00",
+          "scheduled_date": "2026-03-28",
+          "frequency": "daily",
+          "status": "pending"
+        },
+        {
+          "name": "Feed",
+          "duration_minutes": 20,
+          "priority": "high",
+          "category": "general",
+          "notes": "",
+          "scheduled_time": "08:19",
+          "scheduled_date": "2026-03-28",
+          "frequency": "daily",
+          "status": "pending"
+        },
+        {
+          "name": "Nap",
+          "duration_minutes": 45,
+          "priority": "high",
+          "category": "general",
+          "notes": "",
+          "scheduled_time": "09:00",
+          "scheduled_date": "2026-03-28",
+          "frequency": "daily",
+          "status": "pending"
+        }
+      ]
+    }
+  ]
+}

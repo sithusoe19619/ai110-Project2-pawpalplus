@@ -38,9 +38,13 @@ Yes, the design changed several times during the skeleton review phase. The most
 ## 2. Scheduling Logic and Tradeoffs
 
 **a. Constraints and priorities**
+The scheduler considers two primary constraints:
 
-- What constraints does your scheduler consider (for example: time, priority, preferences)?
-- How did you decide which constraints mattered most?
+1. **Time budget** — The owner's `available_minutes` sets a hard cap on how much can be scheduled. `fits_in_budget()` checks each task's `duration_minutes` against the remaining time before including it.
+
+2. **Priority** — Tasks are sorted by a `Priority` enum (HIGH=0, MEDIUM=1, LOW=2) so high-priority tasks are always considered first. This ensures critical care like medication or feeding is never bumped by a low-priority task like enrichment.
+
+Priority was chosen as the primary sort key because a pet owner's most urgent concern is "did the essential care happen?" Time budget is the secondary gate — it determines how far down the priority list the scheduler can reach. Other constraints like `scheduled_time` and `frequency` influence how the plan is displayed and how tasks recur, but they don't affect which tasks make the cut.
 
 **b. Tradeoffs**
 The scheduler uses a greedy algorithm — it sorts all tasks by priority (HIGH → MEDIUM → LOW) and schedules them one by one until the time budget runs out. Once a task is skipped because it doesn't fit, the algorithm moves on and never revisits that decision. This means it can leave time on the table: if a 25-minute MEDIUM task is skipped with 20 minutes remaining, a 10-minute LOW task that comes later in the list is also skipped, even though it would have fit.
@@ -53,13 +57,27 @@ The tradeoff is **simplicity and predictability over optimal time usage**. A mor
 
 **a. How you used AI**
 
-- How did you use AI tools during this project (for example: design brainstorming, debugging, refactoring)?
-- What kinds of prompts or questions were most helpful?
+I used Claude (Anthropic's AI assistant) throughout the entire project, and it became my primary collaborator for design, implementation, and testing. Here's how:
+
+**Which Claude features were most effective for building the scheduler:**
+
+- **Iterative skeleton review** — The single most effective pattern was asking Claude to review my class stubs repeatedly with "do you notice any more missing relationships or potential logic bottlenecks?" Each round caught something new: the first pass found that `Task.status` had no default value, the second caught that `priority` was an unconstrained string (leading to the `Priority` enum), and a third found that `generate_plan()` returned `None` with no defined structure. By the time I started writing actual logic, the skeleton was rock-solid.
+- **Mermaid.js UML generation** — I described my classes in plain English and Claude produced a working Mermaid diagram that I could render immediately. When the design changed, I asked Claude to regenerate it, so the diagram always stayed in sync with the code.
+- **Codebase-aware documentation** — When it came time to write the README and reflection, Claude read `pawpal_system.py` and `app.py` directly and drafted feature descriptions that accurately referenced real method names, parameters, and algorithms — not generic placeholders.
 
 **b. Judgment and verification**
 
-- Describe one moment where you did not accept an AI suggestion as-is.
-- How did you evaluate or verify what the AI suggested?
+**One example of an AI suggestion I rejected or modified:**
+
+When I asked Claude to brainstorm the main classes, it proposed five: Owner, Pet, Task, Scheduler, and DailyPlan. It then tried to narrow that down to four by folding DailyPlan into the Scheduler's return value. I pushed back and said the count could be six — I wanted Relationship included as an explicit design concern. Claude initially resisted, calling Relationship "more of a design concept than a class," but I kept it in scope because I wanted to force myself to think carefully about how the classes connected to each other before writing any code. That decision paid off — it's the reason we caught that `Owner` should own tasks through `Pet` rather than directly, and that `Scheduler` didn't need to hold `Pet` separately since it could access it through `Owner`.
+
+I also rejected Claude's instinct to write all class stubs at once. When Claude filled in `pawpal_system.py` with a full skeleton on the first attempt, I cleared the file and told it "do not add anything yet." I wanted to control the pace — start with an empty file, add classes one phase at a time, and review between each step. That incremental approach is what made the iterative review cycles possible.
+
+**How separate chat sessions for different phases helped me stay organized:**
+
+I deliberately used separate Claude conversations for different project phases. The design phase (brainstorming classes, drawing the UML, reviewing the skeleton) happened in one session. Implementation of the core scheduling logic, sorting, filtering, recurrence, and conflict detection happened in later sessions. Testing and documentation each got their own sessions too.
+
+This separation kept each conversation focused on one concern. The design session didn't get cluttered with debugging output, and the testing session didn't need to re-explain the class structure from scratch — Claude's memory system carried the key decisions forward (like the phase roadmap and the fact that Phase 1 features were complete). It also meant that if a session went in a wrong direction, I could start fresh without losing the work from previous phases that was already committed to git.
 
 ---
 
@@ -67,13 +85,31 @@ The tradeoff is **simplicity and predictability over optimal time usage**. A mor
 
 **a. What you tested**
 
-- What behaviors did you test?
-- Why were these tests important?
+The test suite (`test/test_pawpal.py`) includes 43 tests organized by class and feature:
+
+- **Task** — default status is `"pending"`, default frequency is `"daily"`, `is_high_priority()` returns correct results, `mark_complete()` changes status
+- **Pet** — `has_special_needs()` returns False by default and True when set, `add_task()` appends and sets the pet reference, `remove_task()` clears both list and reference, `get_tasks()` returns all tasks
+- **Owner** — starts with no pets, `add_pet()`/`remove_pet()` work correctly, `get_all_tasks()` returns a flat list across all pets
+- **Scheduler** — `fits_in_budget()` handles true/false/exact-match cases, `generate_plan()` returns correct keys, high-priority tasks are scheduled before low, tasks exceeding budget are skipped, `get_skipped_tasks()` matches plan output
+- **Sorting** — tasks sort chronologically by `scheduled_time`, same-time tasks both appear, empty list returns empty
+- **Recurrence** — daily tasks create next-day occurrence, weekly tasks create next-week occurrence, "as needed" tasks return None, next task auto-adds to same pet
+- **Conflict detection** — same-pet overlap detected, cross-pet overlap detected, different dates produce no conflict, adjacent (non-overlapping) times produce no conflict
+- **Filtering** — filter by status, filter by pet name (case-insensitive), combined AND logic, no filters returns full list
+- **Scheduling integration** — all tasks fit within budget, high-priority scheduled while low skipped when budget is tight, pet with no tasks produces empty plan
+
+These tests were important because they verify that the scheduler's core algorithm works correctly (priority ordering, budget enforcement), that the data model relationships hold (pet references, task lists), and that edge cases like empty lists, exact budget matches, and adjacent times don't break the system.
 
 **b. Confidence**
 
-- How confident are you that your scheduler works correctly?
-- What edge cases would you test next if you had more time?
+Confidence level: 4/5 stars. All 43 tests pass across happy paths and edge cases for every core feature. The one star held back is because the UI layer (`app.py`) is not yet covered by automated tests.
+
+Edge cases to test next if there was more time:
+- Tasks with `duration_minutes = 0`
+- Owner with `available_minutes = 0`
+- `scheduled_time` in invalid format (e.g., `"25:00"`, `"abc"`)
+- Very large task lists (performance testing)
+- Multiple pets with identical task names
+- Removing a pet that still has tasks assigned
 
 ---
 
@@ -81,12 +117,21 @@ The tradeoff is **simplicity and predictability over optimal time usage**. A mor
 
 **a. What went well**
 
-- What part of this project are you most satisfied with?
+The iterative design process worked especially well. Starting with a basic four-class UML diagram and then running multiple rounds of "review the skeleton — find bottlenecks — fix them" caught real issues (missing defaults, undefined return types, unconstrained strings) before any logic was written. By the time implementation started, the class structure was solid and the methods had clear contracts. The result was that features like sorting, filtering, recurrence, and conflict detection slotted in cleanly without requiring major refactors.
 
 **b. What you would improve**
 
-- If you had another iteration, what would you improve or redesign?
+If I had another iteration, I would:
+- **Replace the greedy scheduler with a smarter algorithm** — the current approach can waste time budget by skipping tasks that don't individually fit, even when smaller tasks later in the list would. A knapsack-style approach or a second pass for remaining time would improve utilization.
+- **Move task management to the UI** — currently there's no way to edit or delete tasks once added in the Streamlit app. Adding inline edit/delete buttons would make the app more usable.
+- **Add validation to `scheduled_time`** — the `"HH:MM"` format is not validated, so invalid strings like `"99:99"` would silently break `_to_minutes()`.
 
 **c. Key takeaway**
 
-- What is one important thing you learned about designing systems or working with AI on this project?
+The biggest thing I learned is that **when you work with a powerful AI tool, your job shifts from writing code to being the lead architect**. Claude can generate classes, implement algorithms, write tests, and draft documentation faster than I can type — but it doesn't know what I'm building or why. It doesn't know that I want to start with four classes, not six. It doesn't know that I want an empty file first so I can control the pace. It doesn't know that "Relationship" matters to me as a design concern even if it's not a real Python class.
+
+Every time I let Claude run ahead without direction, I got something reasonable but not what I wanted — like a fully populated `pawpal_system.py` when I'd asked for an empty file, or a five-class design when I was thinking in terms of six. Every time I slowed it down, set constraints, and reviewed before moving on, the output was exactly right.
+
+The pattern that worked was: **I decide what to build and when. Claude decides how to build it. Then I review and correct.** That loop — architect, delegate, review — ran dozens of times across this project, and each cycle made the system cleaner. The design review rounds before implementation were the clearest example: I kept asking "anything else wrong?" and Claude kept finding real issues. But it only found them because I kept asking. Left to generate code in one shot, it would have shipped every one of those bugs.
+
+The takeaway is that AI doesn't replace the architect — it makes the architect more powerful. But only if you actually lead.

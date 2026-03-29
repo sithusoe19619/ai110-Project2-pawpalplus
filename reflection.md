@@ -128,10 +128,4 @@ If I had another iteration, I would:
 
 **c. Key takeaway**
 
-The biggest thing I learned is that **when you work with a powerful AI tool, your job shifts from writing code to being the lead architect**. Claude can generate classes, implement algorithms, write tests, and draft documentation faster than I can type — but it doesn't know what I'm building or why. It doesn't know that I want to start with four classes, not six. It doesn't know that I want an empty file first so I can control the pace. It doesn't know that "Relationship" matters to me as a design concern even if it's not a real Python class.
-
-Every time I let Claude run ahead without direction, I got something reasonable but not what I wanted — like a fully populated `pawpal_system.py` when I'd asked for an empty file, or a five-class design when I was thinking in terms of six. Every time I slowed it down, set constraints, and reviewed before moving on, the output was exactly right.
-
-The pattern that worked was: **I decide what to build and when. Claude decides how to build it. Then I review and correct.** That loop — architect, delegate, review — ran dozens of times across this project, and each cycle made the system cleaner. The design review rounds before implementation were the clearest example: I kept asking "anything else wrong?" and Claude kept finding real issues. But it only found them because I kept asking. Left to generate code in one shot, it would have shipped every one of those bugs.
-
-The takeaway is that AI doesn't replace the architect — it makes the architect more powerful. But only if you actually lead.
+The most important lesson was that **design review before implementation saves more time than debugging after implementation**. The multiple rounds of "review the skeleton" caught issues like missing relationships, undefined return types, and unconstrained strings — all of which would have been much harder to fix after building logic on top of them. Working with AI as a design reviewer (not just a code generator) was the most productive pattern in the project.
